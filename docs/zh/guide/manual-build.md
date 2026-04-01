@@ -249,6 +249,7 @@ bin/spc doctor --auto-fix
 
 - `--build-cli`: 构建一个 cli sapi（命令行界面，可在命令行执行 PHP 代码）
 - `--build-fpm`: 构建一个 fpm sapi（php-fpm，用于和其他传统的 fpm 架构的软件如 nginx 配合使用）
+- `--build-cgi`: 构建一个 cgi sapi（cgi，可用于传统的 cgi 架构的软件如 apache 配合使用）
 - `--build-micro`: 构建一个 micro sapi（用于构建一个包含 PHP 代码的独立可执行二进制）
 - `--build-embed`: 构建一个 embed sapi（用于嵌入到其他 C 语言程序中）
 - `--build-frankenphp`: 构建一个 [frankenphp](https://github.com/php/frankenphp) 二进制
@@ -499,6 +500,8 @@ bin/spc dev:sort-config ext
 | after-exts-extract           | 在要编译的扩展解压到 PHP 源码目录后触发                                    |
 | before-library[*name*]-build | 在名称为 `name` 的库编译前触发（如 `before-library[postgresql]-build`） |
 | after-library[*name*]-build  | 在名称为 `name` 的库编译后触发                                       |
+| after-shared-ext[*name*]-build | 在名称为 `name` 的共享扩展编译后触发（如 `after-shared-ext[redis]-build`）   |
+| before-shared-ext[*name*]-build | 在名称为 `name` 的共享扩展编译前触发                                    |
 | before-php-buildconf         | 在编译 PHP 命令 `./buildconf` 前触发                              |
 | before-php-configure         | 在编译 PHP 命令 `./configure` 前触发                              |
 | before-php-make              | 在编译 PHP 命令 `make` 前触发                                     |

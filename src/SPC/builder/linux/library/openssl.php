@@ -21,6 +21,7 @@ declare(strict_types=1);
 
 namespace SPC\builder\linux\library;
 
+use SPC\builder\linux\SystemUtil;
 use SPC\store\FileSystem;
 
 class openssl extends LinuxLibraryBase
@@ -51,6 +52,9 @@ class openssl extends LinuxLibraryBase
             $zlib_extra = '';
         }
 
+        $openssl_dir = getenv('OPENSSLDIR') ?: null;
+        // TODO: in v3 use the following: $openssl_dir ??= SystemUtil::getOSRelease()['dist'] === 'redhat' ? '/etc/pki/tls' : '/etc/ssl';
+        $openssl_dir ??= '/etc/ssl';
         $ex_lib = trim($ex_lib);
 
         shell()->cd($this->source_dir)->initializeEnv($this)
@@ -58,10 +62,11 @@ class openssl extends LinuxLibraryBase
                 "{$env} ./Configure no-shared {$extra} " .
                 '--prefix=' . BUILD_ROOT_PATH . ' ' .
                 '--libdir=' . BUILD_LIB_PATH . ' ' .
-                '--openssldir=/etc/ssl ' .
+                "--openssldir={$openssl_dir} " .
                 "{$zlib_extra}" .
                 'enable-pie ' .
                 'no-legacy ' .
+                'no-tests ' .
                 "linux-{$arch}"
             )
             ->exec('make clean')
@@ -78,7 +83,7 @@ class openssl extends LinuxLibraryBase
         if (!str_contains($file = FileSystem::readFile(BUILD_LIB_PATH . '/pkgconfig/libcrypto.pc'), 'prefix=')) {
             FileSystem::writeFile(BUILD_LIB_PATH . '/pkgconfig/libcrypto.pc', 'prefix=' . BUILD_ROOT_PATH . "\n" . $file);
         }
-        FileSystem::replaceFileRegex(BUILD_LIB_PATH . '/pkgconfig/libcrypto.pc', '/Libs.private:.*/m', 'Libs.private: ${libdir}/libz.a');
+        FileSystem::replaceFileRegex(BUILD_LIB_PATH . '/pkgconfig/libcrypto.pc', '/Libs.private:.*/m', 'Requires.private: zlib');
         FileSystem::replaceFileRegex(BUILD_LIB_PATH . '/cmake/OpenSSL/OpenSSLConfig.cmake', '/set\(OPENSSL_LIBCRYPTO_DEPENDENCIES .*\)/m', 'set(OPENSSL_LIBCRYPTO_DEPENDENCIES "${OPENSSL_LIBRARY_DIR}/libz.a")');
     }
 }

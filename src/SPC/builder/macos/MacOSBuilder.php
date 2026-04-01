@@ -7,6 +7,8 @@ namespace SPC\builder\macos;
 use SPC\builder\macos\library\MacOSLibraryBase;
 use SPC\builder\unix\UnixBuilderBase;
 use SPC\exception\WrongUsageException;
+use SPC\store\Config;
+use SPC\store\DirDiff;
 use SPC\store\FileSystem;
 use SPC\store\SourcePatcher;
 use SPC\util\GlobalEnvManager;
@@ -100,10 +102,11 @@ class MacOSBuilder extends UnixBuilderBase
         $enableMicro = ($build_target & BUILD_TARGET_MICRO) === BUILD_TARGET_MICRO;
         $enableEmbed = ($build_target & BUILD_TARGET_EMBED) === BUILD_TARGET_EMBED;
         $enableFrankenphp = ($build_target & BUILD_TARGET_FRANKENPHP) === BUILD_TARGET_FRANKENPHP;
+        $enableCgi = ($build_target & BUILD_TARGET_CGI) === BUILD_TARGET_CGI;
 
         // prepare build php envs
         $envs_build_php = SystemUtil::makeEnvVarString([
-            'CFLAGS' => getenv('SPC_CMD_VAR_PHP_CONFIGURE_CFLAGS'),
+            'CFLAGS' => getenv('SPC_CMD_VAR_PHP_MAKE_EXTRA_CFLAGS'),
             'CPPFLAGS' => '-I' . BUILD_INCLUDE_PATH,
             'LDFLAGS' => '-L' . BUILD_LIB_PATH,
         ]);
@@ -117,20 +120,20 @@ class MacOSBuilder extends UnixBuilderBase
         }
 
         $embed_type = getenv('SPC_CMD_VAR_PHP_EMBED_TYPE') ?: 'static';
-        shell()->cd(SOURCE_PATH . '/php-src')
-            ->exec(
-                getenv('SPC_CMD_PREFIX_PHP_CONFIGURE') . ' ' .
+        $this->seekPhpSrcLogFileOnException(fn () => shell()->cd(SOURCE_PATH . '/php-src')->exec(
+            getenv('SPC_CMD_PREFIX_PHP_CONFIGURE') . ' ' .
                 ($enableCli ? '--enable-cli ' : '--disable-cli ') .
                 ($enableFpm ? '--enable-fpm ' : '--disable-fpm ') .
                 ($enableEmbed ? "--enable-embed={$embed_type} " : '--disable-embed ') .
                 ($enableMicro ? '--enable-micro ' : '--disable-micro ') .
+                ($enableCgi ? '--enable-cgi ' : '--disable-cgi ') .
                 $config_file_path .
                 $config_file_scan_dir .
                 $json_74 .
                 $zts .
                 $this->makeStaticExtensionArgs() . ' ' .
                 $envs_build_php
-            );
+        ));
 
         $this->emitPatchPoint('before-php-make');
         SourcePatcher::patchBeforeMake($this);
@@ -144,6 +147,10 @@ class MacOSBuilder extends UnixBuilderBase
         if ($enableFpm) {
             logger()->info('building fpm');
             $this->buildFpm();
+        }
+        if ($enableCgi) {
+            logger()->info('building cgi');
+            $this->buildCgi();
         }
         if ($enableMicro) {
             logger()->info('building micro');
@@ -159,6 +166,11 @@ class MacOSBuilder extends UnixBuilderBase
         if ($enableFrankenphp) {
             logger()->info('building frankenphp');
             $this->buildFrankenphp();
+        }
+        $shared_extensions = array_map('trim', array_filter(explode(',', $this->getOption('build-shared'))));
+        if (!empty($shared_extensions)) {
+            logger()->info('Building shared extensions ...');
+            $this->buildSharedExts();
         }
     }
 
@@ -176,12 +188,19 @@ class MacOSBuilder extends UnixBuilderBase
         $vars = SystemUtil::makeEnvVarString($this->getMakeExtraVars());
 
         $shell = shell()->cd(SOURCE_PATH . '/php-src');
-        $SPC_CMD_PREFIX_PHP_MAKE = getenv('SPC_CMD_PREFIX_PHP_MAKE') ?: 'make';
-        $shell->exec("{$SPC_CMD_PREFIX_PHP_MAKE} {$vars} cli");
-        if (!$this->getOption('no-strip', false)) {
-            $shell->exec('dsymutil -f sapi/cli/php')->exec('strip -S sapi/cli/php');
-        }
-        $this->deployBinary(BUILD_TARGET_CLI);
+        $concurrency = getenv('SPC_CONCURRENCY') ? '-j' . getenv('SPC_CONCURRENCY') : '';
+        $shell->exec("make {$concurrency} {$vars} cli");
+        $this->deploySAPIBinary(BUILD_TARGET_CLI);
+    }
+
+    protected function buildCgi(): void
+    {
+        $vars = SystemUtil::makeEnvVarString($this->getMakeExtraVars());
+
+        $shell = shell()->cd(SOURCE_PATH . '/php-src');
+        $concurrency = getenv('SPC_CONCURRENCY') ? '-j' . getenv('SPC_CONCURRENCY') : '';
+        $shell->exec("make {$concurrency} {$vars} cgi");
+        $this->deploySAPIBinary(BUILD_TARGET_CGI);
     }
 
     /**
@@ -192,30 +211,30 @@ class MacOSBuilder extends UnixBuilderBase
         if ($this->getPHPVersionID() < 80000) {
             throw new WrongUsageException('phpmicro only support PHP >= 8.0!');
         }
-        if ($this->getExt('phar')) {
-            $this->phar_patched = true;
-            SourcePatcher::patchMicroPhar($this->getPHPVersionID());
-        }
 
-        $enable_fake_cli = $this->getOption('with-micro-fake-cli', false) ? ' -DPHP_MICRO_FAKE_CLI' : '';
-        $vars = $this->getMakeExtraVars();
+        try {
+            if ($this->getExt('phar')) {
+                $this->phar_patched = true;
+                SourcePatcher::patchMicroPhar($this->getPHPVersionID());
+            }
 
-        // patch fake cli for micro
-        $vars['EXTRA_CFLAGS'] .= $enable_fake_cli;
-        $vars = SystemUtil::makeEnvVarString($vars);
+            $enable_fake_cli = $this->getOption('with-micro-fake-cli', false) ? ' -DPHP_MICRO_FAKE_CLI' : '';
+            $vars = $this->getMakeExtraVars();
 
-        $shell = shell()->cd(SOURCE_PATH . '/php-src');
-        // build
-        $shell->exec(getenv('SPC_CMD_PREFIX_PHP_MAKE') . " {$vars} micro");
-        // strip
-        if (!$this->getOption('no-strip', false)) {
-            $shell->exec('dsymutil -f sapi/micro/micro.sfx')->exec('strip -S sapi/micro/micro.sfx');
-        }
+            // patch fake cli for micro
+            $vars['EXTRA_CFLAGS'] .= $enable_fake_cli;
+            $vars = SystemUtil::makeEnvVarString($vars);
 
-        $this->deployBinary(BUILD_TARGET_MICRO);
+            $shell = shell()->cd(SOURCE_PATH . '/php-src');
+            // build
+            $concurrency = getenv('SPC_CONCURRENCY') ? '-j' . getenv('SPC_CONCURRENCY') : '';
+            $shell->exec("make {$concurrency} {$vars} micro");
 
-        if ($this->phar_patched) {
-            SourcePatcher::unpatchMicroPhar();
+            $this->deploySAPIBinary(BUILD_TARGET_MICRO);
+        } finally {
+            if ($this->phar_patched) {
+                SourcePatcher::unpatchMicroPhar();
+            }
         }
     }
 
@@ -227,11 +246,9 @@ class MacOSBuilder extends UnixBuilderBase
         $vars = SystemUtil::makeEnvVarString($this->getMakeExtraVars());
 
         $shell = shell()->cd(SOURCE_PATH . '/php-src');
-        $shell->exec(getenv('SPC_CMD_PREFIX_PHP_MAKE') . " {$vars} fpm");
-        if (!$this->getOption('no-strip', false)) {
-            $shell->exec('dsymutil -f sapi/fpm/php-fpm')->exec('strip -S sapi/fpm/php-fpm');
-        }
-        $this->deployBinary(BUILD_TARGET_FPM);
+        $concurrency = getenv('SPC_CONCURRENCY') ? '-j' . getenv('SPC_CONCURRENCY') : '';
+        $shell->exec("make {$concurrency} {$vars} fpm");
+        $this->deploySAPIBinary(BUILD_TARGET_FPM);
     }
 
     /**
@@ -239,14 +256,37 @@ class MacOSBuilder extends UnixBuilderBase
      */
     protected function buildEmbed(): void
     {
+        $sharedExts = array_filter($this->exts, static fn ($ext) => $ext->isBuildShared());
+        $sharedExts = array_filter($sharedExts, static function ($ext) {
+            return Config::getExt($ext->getName(), 'build-with-php') === true;
+        });
+        $install_modules = $sharedExts ? 'install-modules' : '';
         $vars = SystemUtil::makeEnvVarString($this->getMakeExtraVars());
+        $concurrency = getenv('SPC_CONCURRENCY') ? '-j' . getenv('SPC_CONCURRENCY') : '';
+
+        $diff = new DirDiff(BUILD_MODULES_PATH, true);
 
         shell()->cd(SOURCE_PATH . '/php-src')
-            ->exec(getenv('SPC_CMD_PREFIX_PHP_MAKE') . ' INSTALL_ROOT=' . BUILD_ROOT_PATH . " {$vars} install");
+            ->exec('sed -i "" "s|^EXTENSION_DIR = .*|EXTENSION_DIR = /' . basename(BUILD_MODULES_PATH) . '|" Makefile')
+            ->exec("make {$concurrency} INSTALL_ROOT=" . BUILD_ROOT_PATH . " {$vars} install-sapi {$install_modules} install-build install-headers install-programs");
+
+        $libphp = BUILD_LIB_PATH . '/libphp.dylib';
+        if (file_exists($libphp)) {
+            $this->deployBinary($libphp, $libphp, false);
+            // macOS currently have no -release option for dylib, so we just rename it here
+        }
+
+        // process shared extensions build-with-php
+        $increment_files = $diff->getChangedFiles();
+        foreach ($increment_files as $increment_file) {
+            $this->deployBinary($increment_file, $increment_file, false);
+        }
 
         if (getenv('SPC_CMD_VAR_PHP_EMBED_TYPE') === 'static') {
             $AR = getenv('AR') ?: 'ar';
             f_passthru("{$AR} -t " . BUILD_LIB_PATH . "/libphp.a | grep '\\.a$' | xargs -n1 {$AR} d " . BUILD_LIB_PATH . '/libphp.a');
+            // export dynamic symbols
+            SystemUtil::exportDynamicSymbols(BUILD_LIB_PATH . '/libphp.a');
         }
         $this->patchPhpScripts();
     }
@@ -254,10 +294,10 @@ class MacOSBuilder extends UnixBuilderBase
     private function getMakeExtraVars(): array
     {
         $config = (new SPCConfigUtil($this, ['libs_only_deps' => true]))->config($this->ext_list, $this->lib_list, $this->getOption('with-suggested-exts'), $this->getOption('with-suggested-libs'));
-        return [
+        return array_filter([
             'EXTRA_CFLAGS' => getenv('SPC_CMD_VAR_PHP_MAKE_EXTRA_CFLAGS'),
             'EXTRA_LDFLAGS_PROGRAM' => '-L' . BUILD_LIB_PATH,
             'EXTRA_LIBS' => $config['libs'],
-        ];
+        ]);
     }
 }

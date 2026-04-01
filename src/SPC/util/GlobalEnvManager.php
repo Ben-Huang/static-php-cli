@@ -39,8 +39,13 @@ class GlobalEnvManager
         // Define env vars for unix
         if (is_unix()) {
             self::addPathIfNotExists(BUILD_BIN_PATH);
-            self::putenv('PKG_CONFIG=' . BUILD_BIN_PATH . '/pkg-config');
-            self::putenv('PKG_CONFIG_PATH=' . BUILD_ROOT_PATH . '/lib/pkgconfig');
+            self::addPathIfNotExists(PKG_ROOT_PATH . '/bin');
+            $pkgConfigPath = getenv('PKG_CONFIG_PATH');
+            if ($pkgConfigPath !== false) {
+                self::putenv('PKG_CONFIG_PATH=' . BUILD_LIB_PATH . "/pkgconfig:{$pkgConfigPath}");
+            } else {
+                self::putenv('PKG_CONFIG_PATH=' . BUILD_LIB_PATH . '/pkgconfig');
+            }
         }
 
         $ini = self::readIniFile();

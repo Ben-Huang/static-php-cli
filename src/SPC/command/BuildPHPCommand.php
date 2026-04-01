@@ -33,6 +33,7 @@ class BuildPHPCommand extends BuildCommand
         $this->addOption('build-fpm', null, null, 'Build fpm SAPI (not available on Windows)');
         $this->addOption('build-embed', null, null, 'Build embed SAPI (not available on Windows)');
         $this->addOption('build-frankenphp', null, null, 'Build FrankenPHP SAPI (not available on Windows)');
+        $this->addOption('build-cgi', null, null, 'Build cgi SAPI');
         $this->addOption('build-all', null, null, 'Build all SAPI');
         $this->addOption('no-strip', null, null, 'build without strip, keep symbols to debug');
         $this->addOption('disable-opcache-jit', null, null, 'disable opcache jit');
@@ -47,6 +48,7 @@ class BuildPHPCommand extends BuildCommand
         $this->addOption('with-upx-pack', null, null, 'Compress / pack binary using UPX tool (linux/windows only)');
         $this->addOption('with-micro-logo', null, InputOption::VALUE_REQUIRED, 'Use custom .ico for micro.sfx (windows only)');
         $this->addOption('enable-micro-win32', null, null, 'Enable win32 mode for phpmicro (Windows only)');
+        $this->addOption('with-frankenphp-app', null, InputOption::VALUE_REQUIRED, 'Path to a folder to be embedded in FrankenPHP');
     }
 
     public function handle(): int
@@ -211,12 +213,6 @@ class BuildPHPCommand extends BuildCommand
         // start to build
         $builder->buildPHP($rule);
 
-        // build dynamic extensions if needed
-        if (!empty($shared_extensions)) {
-            logger()->info('Building shared extensions ...');
-            $builder->buildSharedExts();
-        }
-
         $builder->testPHP($rule);
 
         // compile stopwatch :P
@@ -227,11 +223,9 @@ class BuildPHPCommand extends BuildCommand
 
         // ---------- When using bin/spc-alpine-docker, the build root path is different from the host system ----------
         $build_root_path = BUILD_ROOT_PATH;
-        $cwd = getcwd();
         $fixed = '';
+        $build_root_path = get_display_path($build_root_path);
         if (!empty(getenv('SPC_FIX_DEPLOY_ROOT'))) {
-            str_replace($cwd, '', $build_root_path);
-            $build_root_path = getenv('SPC_FIX_DEPLOY_ROOT') . '/' . basename($build_root_path);
             $fixed = ' (host system)';
         }
         if (($rule & BUILD_TARGET_CLI) === BUILD_TARGET_CLI) {
@@ -280,6 +274,7 @@ class BuildPHPCommand extends BuildCommand
         $rule |= ($this->getOption('build-fpm') ? BUILD_TARGET_FPM : BUILD_TARGET_NONE);
         $rule |= $this->getOption('build-embed') || !empty($shared_extensions) ? BUILD_TARGET_EMBED : BUILD_TARGET_NONE;
         $rule |= ($this->getOption('build-frankenphp') ? (BUILD_TARGET_FRANKENPHP | BUILD_TARGET_EMBED) : BUILD_TARGET_NONE);
+        $rule |= ($this->getOption('build-cgi') ? BUILD_TARGET_CGI : BUILD_TARGET_NONE);
         $rule |= ($this->getOption('build-all') ? BUILD_TARGET_ALL : BUILD_TARGET_NONE);
         return $rule;
     }

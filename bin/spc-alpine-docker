@@ -3,7 +3,7 @@
 set -e
 
 # This file is using docker to run commands
-SPC_DOCKER_VERSION=v5
+SPC_DOCKER_VERSION=v6
 
 # Detect docker can run
 if ! which docker >/dev/null; then
@@ -108,8 +108,7 @@ RUN apk update; \
         wget \
         xz \
         gettext-dev \
-        binutils-gold \
-        patchelf
+        binutils-gold
 
 RUN curl -#fSL https://dl.static-php.dev/static-php-cli/bulk/php-8.4.4-cli-linux-\$(uname -m).tar.gz | tar -xz -C /usr/local/bin && \
     chmod +x /usr/local/bin/php
@@ -122,6 +121,14 @@ ADD ./src /app/src
 COPY ./composer.* /app/
 ADD ./bin /app/bin
 RUN composer install --no-dev
+ADD ./config /app/config
+RUN bin/spc doctor --auto-fix
+RUN bin/spc install-pkg upx
+
+RUN mv /app/pkgroot/\$(uname -m)-linux /app/pkgroot-private
+ADD bin/docker-entrypoint.sh /bin/docker-entrypoint.sh
+RUN chmod +x /bin/docker-entrypoint.sh
+ENTRYPOINT ["/bin/docker-entrypoint.sh"]
 EOF
 fi
 
@@ -142,6 +149,7 @@ MOUNT_LIST="$MOUNT_LIST -v ""$(pwd)""/source:/app/source"
 MOUNT_LIST="$MOUNT_LIST -v ""$(pwd)""/dist:/app/dist"
 MOUNT_LIST="$MOUNT_LIST -v ""$(pwd)""/downloads:/app/downloads"
 MOUNT_LIST="$MOUNT_LIST -v ""$(pwd)""/pkgroot:/app/pkgroot"
+MOUNT_LIST="$MOUNT_LIST -v ""$(pwd)""/log:/app/log"
 if [ -f "$(pwd)/craft.yml" ]; then
     MOUNT_LIST="$MOUNT_LIST -v ""$(pwd)""/craft.yml:/app/craft.yml"
 fi
@@ -151,6 +159,47 @@ ENV_LIST=""
 ENV_LIST="$ENV_LIST -e SPC_FIX_DEPLOY_ROOT="$(pwd)""
 if [ ! -z "$GITHUB_TOKEN" ]; then
     ENV_LIST="$ENV_LIST -e GITHUB_TOKEN=$GITHUB_TOKEN"
+fi
+
+# Intercept and rewrite --with-frankenphp-app option, and mount host path to /app/app
+FRANKENPHP_APP_PATH=""
+NEW_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --with-frankenphp-app=*)
+            FRANKENPHP_APP_PATH="${1#*=}"
+            NEW_ARGS+=("--with-frankenphp-app=/app/app")
+            shift
+            ;;
+        --with-frankenphp-app)
+            if [ -n "${2:-}" ]; then
+                FRANKENPHP_APP_PATH="$2"
+                NEW_ARGS+=("--with-frankenphp-app=/app/app")
+                shift 2
+            else
+                NEW_ARGS+=("$1")
+                shift
+            fi
+            ;;
+        *)
+            NEW_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Normalize the path and add mount if provided
+if [ -n "$FRANKENPHP_APP_PATH" ]; then
+    # expand ~ to $HOME
+    if [ "${FRANKENPHP_APP_PATH#~}" != "$FRANKENPHP_APP_PATH" ]; then
+        FRANKENPHP_APP_PATH="$HOME${FRANKENPHP_APP_PATH#~}"
+    fi
+    # make absolute if relative
+    case "$FRANKENPHP_APP_PATH" in
+        /*) ABS_APP_PATH="$FRANKENPHP_APP_PATH" ;;
+        *) ABS_APP_PATH="$(pwd)/$FRANKENPHP_APP_PATH" ;;
+    esac
+    MOUNT_LIST="$MOUNT_LIST -v $ABS_APP_PATH:/app/app"
 fi
 
 # Run docker
@@ -174,5 +223,5 @@ if [ "$SPC_DOCKER_DEBUG" = "yes" ]; then
     set -ex
     $DOCKER_EXECUTABLE run $PLATFORM_ARG --rm $INTERACT $ENV_LIST $MOUNT_LIST cwcc-spc-$SPC_USE_ARCH-$SPC_DOCKER_VERSION /bin/bash
 else
-    $DOCKER_EXECUTABLE run $PLATFORM_ARG --rm $INTERACT $ENV_LIST $MOUNT_LIST cwcc-spc-$SPC_USE_ARCH-$SPC_DOCKER_VERSION bin/spc $@
+    $DOCKER_EXECUTABLE run $PLATFORM_ARG --rm $INTERACT $ENV_LIST $MOUNT_LIST cwcc-spc-$SPC_USE_ARCH-$SPC_DOCKER_VERSION bin/spc "${NEW_ARGS[@]}"
 fi

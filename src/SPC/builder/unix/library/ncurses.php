@@ -16,6 +16,7 @@ trait ncurses
 
         UnixAutoconfExecutor::create($this)
             ->appendEnv([
+                'CFLAGS' => '-std=c17',
                 'LDFLAGS' => SPCTarget::isStatic() ? '-static' : '',
             ])
             ->configure(
@@ -29,7 +30,7 @@ trait ncurses
                 '--without-tests',
                 '--without-dlsym',
                 '--without-debug',
-                '-enable-symlinks',
+                '--enable-symlinks',
                 "--bindir={$this->getBinDir()}",
                 "--includedir={$this->getIncludeDir()}",
                 "--libdir={$this->getLibDir()}",
@@ -38,7 +39,7 @@ trait ncurses
             ->make();
         $final = FileSystem::scanDirFiles(BUILD_BIN_PATH, relative: true);
         // Remove the new files
-        $new_files = array_diff($final, $filelist);
+        $new_files = array_diff($final, $filelist ?: []);
         foreach ($new_files as $file) {
             @unlink(BUILD_BIN_PATH . '/' . $file);
         }

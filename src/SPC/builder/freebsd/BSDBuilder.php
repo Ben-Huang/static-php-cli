@@ -25,10 +25,6 @@ class BSDBuilder extends UnixBuilderBase
         f_putenv('CXX=' . $this->getOption('cxx', 'clang++'));
         // set PATH
         f_putenv('PATH=' . BUILD_ROOT_PATH . '/bin:' . getenv('PATH'));
-        // set PKG_CONFIG
-        f_putenv('PKG_CONFIG=' . BUILD_ROOT_PATH . '/bin/pkg-config');
-        // set PKG_CONFIG_PATH
-        f_putenv('PKG_CONFIG_PATH=' . BUILD_LIB_PATH . '/pkgconfig/');
 
         // set arch (default: current)
         $this->setOptionIfNotExist('arch', php_uname('m'));
@@ -122,6 +118,11 @@ class BSDBuilder extends UnixBuilderBase
             }
             $this->buildEmbed();
         }
+        $shared_extensions = array_map('trim', array_filter(explode(',', $this->getOption('build-shared'))));
+        if (!empty($shared_extensions)) {
+            logger()->info('Building shared extensions ...');
+            $this->buildSharedExts();
+        }
         if ($enableFrankenphp) {
             logger()->info('building frankenphp');
             $this->buildFrankenphp();
@@ -152,7 +153,7 @@ class BSDBuilder extends UnixBuilderBase
         if (!$this->getOption('no-strip', false)) {
             $shell->exec('strip sapi/cli/php');
         }
-        $this->deployBinary(BUILD_TARGET_CLI);
+        $this->deploySAPIBinary(BUILD_TARGET_CLI);
     }
 
     /**
@@ -183,7 +184,7 @@ class BSDBuilder extends UnixBuilderBase
         if (!$this->getOption('no-strip', false)) {
             shell()->cd(SOURCE_PATH . '/php-src/sapi/micro')->exec('strip --strip-unneeded micro.sfx');
         }
-        $this->deployBinary(BUILD_TARGET_MICRO);
+        $this->deploySAPIBinary(BUILD_TARGET_MICRO);
 
         if ($this->phar_patched) {
             SourcePatcher::unpatchMicroPhar();
@@ -205,7 +206,7 @@ class BSDBuilder extends UnixBuilderBase
         if (!$this->getOption('no-strip', false)) {
             $shell->exec('strip sapi/fpm/php-fpm');
         }
-        $this->deployBinary(BUILD_TARGET_FPM);
+        $this->deploySAPIBinary(BUILD_TARGET_FPM);
     }
 
     /**

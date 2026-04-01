@@ -16,12 +16,11 @@ class UnixAutoconfExecutor extends Executor
 
     protected array $configure_args = [];
 
-    protected array $ignore_args = [];
-
     public function __construct(protected BSDLibraryBase|LinuxLibraryBase|MacOSLibraryBase $library)
     {
         parent::__construct($library);
         $this->initShell();
+        $this->configure_args = $this->getDefaultConfigureArgs();
     }
 
     /**
@@ -29,17 +28,10 @@ class UnixAutoconfExecutor extends Executor
      */
     public function configure(...$args): static
     {
-        // remove all the ignored args
-        $args = array_merge($args, $this->getDefaultConfigureArgs(), $this->configure_args);
-        $args = array_diff($args, $this->ignore_args);
+        $args = array_merge($args, $this->configure_args);
         $configure_args = implode(' ', $args);
 
         return $this->seekLogFileOnException(fn () => $this->shell->exec("./configure {$configure_args}"));
-    }
-
-    public function getConfigureArgsString(): string
-    {
-        return implode(' ', array_merge($this->getDefaultConfigureArgs(), $this->configure_args));
     }
 
     /**
@@ -50,18 +42,22 @@ class UnixAutoconfExecutor extends Executor
      * @param bool         $with_clean     Whether to clean before building
      * @param array        $after_env_vars Environment variables postfix
      */
-    public function make(string $target = '', false|string $with_install = 'install', bool $with_clean = true, array $after_env_vars = []): static
+    public function make(string $target = '', false|string $with_install = 'install', bool $with_clean = true, array $after_env_vars = [], ?string $dir = null): static
     {
-        return $this->seekLogFileOnException(function () use ($target, $with_install, $with_clean, $after_env_vars) {
+        return $this->seekLogFileOnException(function () use ($target, $with_install, $with_clean, $after_env_vars, $dir) {
+            $shell = $this->shell;
+            if ($dir) {
+                $shell = $shell->cd($dir);
+            }
             if ($with_clean) {
-                $this->shell->exec('make clean');
+                $shell->exec('make clean');
             }
             $after_env_vars_str = $after_env_vars !== [] ? shell()->setEnv($after_env_vars)->getEnvString() : '';
-            $this->shell->exec("make -j{$this->library->getBuilder()->concurrency} {$target} {$after_env_vars_str}");
+            $shell->exec("make -j{$this->library->getBuilder()->concurrency} {$target} {$after_env_vars_str}");
             if ($with_install !== false) {
-                $this->shell->exec("make {$with_install}");
+                $shell->exec("make {$with_install}");
             }
-            return $this->shell;
+            return $shell;
         });
     }
 
@@ -107,7 +103,13 @@ class UnixAutoconfExecutor extends Executor
      */
     public function removeConfigureArgs(...$args): static
     {
-        $this->ignore_args = [...$this->ignore_args, ...$args];
+        $this->configure_args = array_diff($this->configure_args, $args);
+        return $this;
+    }
+
+    public function setEnv(array $env): static
+    {
+        $this->shell->setEnv($env);
         return $this;
     }
 
@@ -123,8 +125,8 @@ class UnixAutoconfExecutor extends Executor
     private function getDefaultConfigureArgs(): array
     {
         return [
-            '--disable-shared',
             '--enable-static',
+            '--disable-shared',
             "--prefix={$this->library->getBuildRootPath()}",
             '--with-pic',
             '--enable-pic',

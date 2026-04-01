@@ -62,12 +62,6 @@ class BuilderTest extends TestCase
         $this->assertInstanceOf(Extension::class, $this->builder->getExt('mbregex'));
     }
 
-    public function testHasCpp()
-    {
-        // mbregex doesn't have cpp
-        $this->assertFalse($this->builder->hasCpp());
-    }
-
     public function testMakeExtensionArgs()
     {
         $this->assertStringContainsString('--enable-mbstring', $this->builder->makeStaticExtensionArgs());
@@ -160,7 +154,7 @@ class BuilderTest extends TestCase
             [BUILD_TARGET_MICRO, 'micro'],
             [BUILD_TARGET_EMBED, 'embed'],
             [BUILD_TARGET_FRANKENPHP, 'frankenphp'],
-            [BUILD_TARGET_ALL, 'cli, micro, fpm, embed, frankenphp'],
+            [BUILD_TARGET_ALL, 'cli, micro, fpm, embed, frankenphp, cgi'],
             [BUILD_TARGET_CLI | BUILD_TARGET_EMBED, 'cli, embed'],
         ];
     }

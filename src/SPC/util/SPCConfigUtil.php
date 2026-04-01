@@ -6,6 +6,8 @@ namespace SPC\util;
 
 use SPC\builder\BuilderBase;
 use SPC\builder\BuilderProvider;
+use SPC\builder\Extension;
+use SPC\builder\LibraryBase;
 use SPC\exception\WrongUsageException;
 use SPC\store\Config;
 use Symfony\Component\Console\Input\ArgvInput;
@@ -52,6 +54,9 @@ class SPCConfigUtil
      */
     public function config(array $extensions = [], array $libraries = [], bool $include_suggest_ext = false, bool $include_suggest_lib = false): array
     {
+        logger()->debug('config extensions: ' . implode(',', $extensions));
+        logger()->debug('config libs: ' . implode(',', $libraries));
+        logger()->debug('config suggest for [ext, lib]: ' . ($include_suggest_ext ? 'true' : 'false') . ',' . ($include_suggest_lib ? 'true' : 'false'));
         $extra_exts = [];
         foreach ($extensions as $ext) {
             $extra_exts = array_merge($extra_exts, Config::getExt($ext, 'ext-suggests', []));
@@ -75,7 +80,6 @@ class SPCConfigUtil
         $libs = $this->getLibsString($libraries, !$this->absolute_libs);
 
         // additional OS-specific libraries (e.g. macOS -lresolv)
-        // embed
         if ($extra_libs = SPCTarget::getRuntimeLibs()) {
             $libs .= " {$extra_libs}";
         }
@@ -87,7 +91,7 @@ class SPCConfigUtil
         if (SPCTarget::getTargetOS() === 'Darwin') {
             $libs .= " {$this->getFrameworksString($extensions)}";
         }
-        if ($this->builder->hasCpp()) {
+        if ($this->hasCpp($extensions, $libraries)) {
             $libcpp = SPCTarget::getTargetOS() === 'Darwin' ? '-lc++' : '-lstdc++';
             $libs = str_replace($libcpp, '', $libs) . " {$libcpp}";
         }
@@ -123,6 +127,84 @@ class SPCConfigUtil
         ];
     }
 
+    /**
+     * [Helper function]
+     * Get configuration for a specific extension(s) dependencies.
+     *
+     * @param Extension|Extension[] $extension           Extension instance or list
+     * @param bool                  $include_suggest_ext Whether to include suggested extensions
+     * @param bool                  $include_suggest_lib Whether to include suggested libraries
+     * @return array{
+     *     cflags: string,
+     *     ldflags: string,
+     *     libs: string
+     * }
+     */
+    public function getExtensionConfig(array|Extension $extension, bool $include_suggest_ext = false, bool $include_suggest_lib = false): array
+    {
+        if (!is_array($extension)) {
+            $extension = [$extension];
+        }
+        $libs = array_map(fn ($y) => $y->getName(), array_merge(...array_map(fn ($x) => $x->getLibraryDependencies(true), $extension)));
+        return $this->config(
+            extensions: array_map(fn ($x) => $x->getName(), $extension),
+            libraries: $libs,
+            include_suggest_ext: $include_suggest_ext ?: $this->builder?->getOption('with-suggested-exts') ?? false,
+            include_suggest_lib: $include_suggest_lib ?: $this->builder?->getOption('with-suggested-libs') ?? false,
+        );
+    }
+
+    /**
+     * [Helper function]
+     * Get configuration for a specific library(s) dependencies.
+     *
+     * @param LibraryBase|LibraryBase[] $lib                 Library instance or list
+     * @param bool                      $include_suggest_lib Whether to include suggested libraries
+     * @return array{
+     *     cflags: string,
+     *     ldflags: string,
+     *     libs: string
+     * }
+     */
+    public function getLibraryConfig(array|LibraryBase $lib, bool $include_suggest_lib = false): array
+    {
+        if (!is_array($lib)) {
+            $lib = [$lib];
+        }
+        $save_no_php = $this->no_php;
+        $this->no_php = true;
+        $save_libs_only_deps = $this->libs_only_deps;
+        $this->libs_only_deps = true;
+        $ret = $this->config(
+            libraries: array_map(fn ($x) => $x->getName(), $lib),
+            include_suggest_lib: $include_suggest_lib ?: $this->builder?->getOption('with-suggested-libs') ?? false,
+        );
+        $this->no_php = $save_no_php;
+        $this->libs_only_deps = $save_libs_only_deps;
+        return $ret;
+    }
+
+    private function hasCpp(array $extensions, array $libraries): bool
+    {
+        // judge cpp-extension
+        $builderExtNames = array_keys($this->builder->getExts(false));
+        $exts = array_unique([...$builderExtNames, ...$extensions]);
+
+        foreach ($exts as $ext) {
+            if (Config::getExt($ext, 'cpp-extension', false) === true) {
+                return true;
+            }
+        }
+        $builderLibNames = array_keys($this->builder->getLibs());
+        $libs = array_unique([...$builderLibNames, ...$libraries]);
+        foreach ($libs as $lib) {
+            if (Config::getLib($lib, 'cpp-library', false) === true) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private function getIncludesString(array $libraries): string
     {
         $base = BUILD_INCLUDE_PATH;
@@ -143,9 +225,17 @@ class SPCConfigUtil
         // parse pkg-configs
         foreach ($libraries as $library) {
             $pc = Config::getLib($library, 'pkg-configs', []);
+            $pkg_config_path = getenv('PKG_CONFIG_PATH') ?: '';
+            $search_paths = array_filter(explode(is_unix() ? ':' : ';', $pkg_config_path));
             foreach ($pc as $file) {
-                if (!file_exists(BUILD_LIB_PATH . "/pkgconfig/{$file}.pc")) {
-                    throw new WrongUsageException("pkg-config file '{$file}.pc' for lib [{$library}] does not exist in '" . BUILD_LIB_PATH . "/pkgconfig'. Please build it first.");
+                $found = false;
+                foreach ($search_paths as $path) {
+                    if (file_exists($path . "/{$file}.pc")) {
+                        $found = true;
+                    }
+                }
+                if (!$found) {
+                    throw new WrongUsageException("pkg-config file '{$file}.pc' for lib [{$library}] does not exist. Please build it first.");
                 }
             }
             $pc_cflags = implode(' ', $pc);
@@ -174,9 +264,17 @@ class SPCConfigUtil
         foreach ($libraries as $library) {
             // add pkg-configs libs
             $pkg_configs = Config::getLib($library, 'pkg-configs', []);
-            foreach ($pkg_configs as $pkg_config) {
-                if (!file_exists(BUILD_LIB_PATH . "/pkgconfig/{$pkg_config}.pc")) {
-                    throw new WrongUsageException("pkg-config file '{$pkg_config}.pc' for lib [{$library}] does not exist in '" . BUILD_LIB_PATH . "/pkgconfig'. Please build it first.");
+            $pkg_config_path = getenv('PKG_CONFIG_PATH') ?: '';
+            $search_paths = array_filter(explode(is_unix() ? ':' : ';', $pkg_config_path));
+            foreach ($pkg_configs as $file) {
+                $found = false;
+                foreach ($search_paths as $path) {
+                    if (file_exists($path . "/{$file}.pc")) {
+                        $found = true;
+                    }
+                }
+                if (!$found) {
+                    throw new WrongUsageException("pkg-config file '{$file}.pc' for lib [{$library}] does not exist. Please build it first.");
                 }
             }
             $pkg_configs = implode(' ', $pkg_configs);

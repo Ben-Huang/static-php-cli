@@ -22,9 +22,10 @@ class SourcePatcher
         FileSystem::addSourceExtractHook('swoole', [__CLASS__, 'patchSwoole']);
         FileSystem::addSourceExtractHook('php-src', [__CLASS__, 'patchPhpLibxml212']);
         FileSystem::addSourceExtractHook('php-src', [__CLASS__, 'patchGDWin32']);
-        FileSystem::addSourceExtractHook('php-src', [__CLASS__, 'patchFfiCentos7FixO3strncmp']);
+        // FileSystem::addSourceExtractHook('php-src', [__CLASS__, 'patchFfiCentos7FixO3strncmp']);
         FileSystem::addSourceExtractHook('sqlsrv', [__CLASS__, 'patchSQLSRVWin32']);
         FileSystem::addSourceExtractHook('pdo_sqlsrv', [__CLASS__, 'patchSQLSRVWin32']);
+        FileSystem::addSourceExtractHook('pdo_sqlsrv', [__CLASS__, 'patchSQLSRVPhp85']);
         FileSystem::addSourceExtractHook('yaml', [__CLASS__, 'patchYamlWin32']);
         FileSystem::addSourceExtractHook('libyaml', [__CLASS__, 'patchLibYaml']);
         FileSystem::addSourceExtractHook('php-src', [__CLASS__, 'patchImapLicense']);
@@ -44,7 +45,7 @@ class SourcePatcher
         }
         foreach ($builder->getLibs() as $lib) {
             if ($lib->patchBeforeBuildconf() === true) {
-                logger()->info("Library [{$lib->getName()}]patched before buildconf");
+                logger()->info("Library [{$lib->getName()}] patched before buildconf");
             }
         }
         // patch windows php 8.1 bug
@@ -432,6 +433,23 @@ class SourcePatcher
         return false;
     }
 
+    /**
+     * Fix the compilation issue of pdo_sqlsrv with php 8.5
+     */
+    public static function patchSQLSRVPhp85(): bool
+    {
+        $source_dir = SOURCE_PATH . '/php-src/ext/pdo_sqlsrv';
+        if (!file_exists($source_dir . '/config.m4') && is_dir($source_dir . '/source/pdo_sqlsrv')) {
+            FileSystem::moveFileOrDir($source_dir . '/LICENSE', $source_dir . '/source/pdo_sqlsrv/LICENSE');
+            FileSystem::moveFileOrDir($source_dir . '/source/shared', $source_dir . '/source/pdo_sqlsrv/shared');
+            FileSystem::moveFileOrDir($source_dir . '/source/pdo_sqlsrv', SOURCE_PATH . '/pdo_sqlsrv');
+            FileSystem::removeDir($source_dir);
+            FileSystem::moveFileOrDir(SOURCE_PATH . '/pdo_sqlsrv', $source_dir);
+            return true;
+        }
+        return false;
+    }
+
     public static function patchYamlWin32(): bool
     {
         FileSystem::replaceFileStr(SOURCE_PATH . '/php-src/ext/yaml/config.w32', "lib.substr(lib.length - 6, 6) == '_a.lib'", "lib.substr(lib.length - 6, 6) == '_a.lib' || 'yes' == 'yes'");
@@ -549,6 +567,39 @@ class SourcePatcher
         FileSystem::writeFile(SOURCE_PATH . '/php-src/Makefile', implode("\r\n", $lines));
     }
 
+    /**
+     * Patch cgi SAPI Makefile for Windows.
+     */
+    public static function patchWindowsCGITarget(): void
+    {
+        // search Makefile code line contains "$(BUILD_DIR)\php-cgi.exe:"
+        $content = FileSystem::readFile(SOURCE_PATH . '/php-src/Makefile');
+        $lines = explode("\r\n", $content);
+        $line_num = 0;
+        $found = false;
+        foreach ($lines as $v) {
+            if (str_contains($v, '$(BUILD_DIR)\php-cgi.exe:')) {
+                $found = $line_num;
+                break;
+            }
+            ++$line_num;
+        }
+        if ($found === false) {
+            throw new PatchException('Windows Makefile patching for php-cgi.exe target', 'Cannot patch windows CGI Makefile, Makefile does not contain "$(BUILD_DIR)\php-cgi.exe:" line');
+        }
+        // cli:                 $(BUILD_DIR)\php.exe:                 $(DEPS_CLI) $(CLI_GLOBAL_OBJS)                                                   $(BUILD_DIR)\$(PHPLIB) $(BUILD_DIR)\php.exe.res $(BUILD_DIR)\php.exe.manifest
+        // $lines[$line_num] = '$(BUILD_DIR)\php.exe: generated_files $(DEPS_CLI) $(CLI_GLOBAL_OBJS) $(PHP_GLOBAL_OBJS) $(STATIC_EXT_OBJS) $(ASM_OBJS)                        $(BUILD_DIR)\php.exe.res $(BUILD_DIR)\php.exe.manifest';
+        // cgi:              $(BUILD_DIR)\php-cgi.exe:                 $(DEPS_CGI) $(CGI_GLOBAL_OBJS)                                                   $(BUILD_DIR)\$(PHPLIB) $(BUILD_DIR)\php-cgi.exe.res $(BUILD_DIR)\php-cgi.exe.manifest
+        $lines[$line_num] = '$(BUILD_DIR)\php-cgi.exe: $(DEPS_CGI) $(CGI_GLOBAL_OBJS) $(PHP_GLOBAL_OBJS) $(STATIC_EXT_OBJS) $(ASM_OBJS) $(BUILD_DIR)\php-cgi.exe.res $(BUILD_DIR)\php-cgi.exe.manifest';
+
+        // cli:                        @"$(LINK)" /nologo $(CGI_GLOBAL_OBJS_RESP) $(BUILD_DIR)\$(PHPLIB)                                                                 $(LIBS_CGI) $(BUILD_DIR)\php-cgi.exe.res /out:$(BUILD_DIR)\php-cgi.exe $(LDFLAGS) $(LDFLAGS_CGI)
+        $lines[$line_num + 1] = "\t" . '@"$(LINK)" /nologo $(PHP_GLOBAL_OBJS_RESP) $(CGI_GLOBAL_OBJS_RESP) $(STATIC_EXT_OBJS_RESP) $(STATIC_EXT_LIBS) $(ASM_OBJS) $(LIBS) $(LIBS_CGI) $(BUILD_DIR)\php-cgi.exe.res /out:$(BUILD_DIR)\php-cgi.exe $(LDFLAGS) $(LDFLAGS_CGI) /ltcg /nodefaultlib:msvcrt /nodefaultlib:msvcrtd /ignore:4286';
+        FileSystem::writeFile(SOURCE_PATH . '/php-src/Makefile', implode("\r\n", $lines));
+
+        // Patch cgi-static, comment ZEND_TSRMLS_CACHE_DEFINE()
+        FileSystem::replaceFileRegex(SOURCE_PATH . '\php-src\sapi\cgi\cgi_main.c', '/^ZEND_TSRMLS_CACHE_DEFINE\(\)/m', '// ZEND_TSRMLS_CACHE_DEFINE()');
+    }
+
     public static function patchPhpLibxml212(): bool
     {
         $file = file_get_contents(SOURCE_PATH . '/php-src/main/php_version.h');
@@ -583,7 +634,13 @@ class SourcePatcher
                 FileSystem::replaceFileStr(SOURCE_PATH . '/php-src/ext/gd/libgd/gdft.c', '#ifndef MSWIN32', '#ifndef _WIN32');
             }
             // custom config.w32, because official config.w32 is hard-coded many things
-            $origin = $ver_id >= 80100 ? file_get_contents(ROOT_DIR . '/src/globals/extra/gd_config_81.w32') : file_get_contents(ROOT_DIR . '/src/globals/extra/gd_config_80.w32');
+            if ($ver_id >= 80500) {
+                $origin = file_get_contents(ROOT_DIR . '/src/globals/extra/gd_config_85.w32');
+            } elseif ($ver_id >= 80100) {
+                $origin = file_get_contents(ROOT_DIR . '/src/globals/extra/gd_config_81.w32');
+            } else {
+                $origin = file_get_contents(ROOT_DIR . '/src/globals/extra/gd_config_80.w32');
+            }
             file_put_contents(SOURCE_PATH . '/php-src/ext/gd/config.w32.bak', file_get_contents(SOURCE_PATH . '/php-src/ext/gd/config.w32'));
             return file_put_contents(SOURCE_PATH . '/php-src/ext/gd/config.w32', $origin) !== false;
         }
