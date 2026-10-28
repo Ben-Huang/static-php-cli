@@ -84,6 +84,25 @@
             "path": "COPYING"
         }
     },
+    "ext-decimal": {
+        "type": "ghtagtar",
+        "repo": "php-decimal/ext-decimal",
+        "match": "v2\\.\\d.*",
+        "path": "php-src/ext/decimal",
+        "license": {
+            "type": "file",
+            "path": "LICENSE"
+        }
+    },
+    "deepclone": {
+        "type": "ghtagtar",
+        "repo": "symfony/php-ext-deepclone",
+        "path": "php-src/ext/deepclone",
+        "license": {
+            "type": "file",
+            "path": "LICENSE"
+        }
+    },
     "dio": {
         "type": "url",
         "url": "https://pecl.php.net/get/dio",
@@ -227,7 +246,7 @@
     },
     "ext-rdkafka": {
         "type": "ghtar",
-        "repo": "arnaud-lb/php-rdkafka",
+        "repo": "php-rdkafka/php-rdkafka",
         "path": "php-src/ext/rdkafka",
         "license": {
             "type": "file",
@@ -314,10 +333,9 @@
         }
     },
     "ext-zstd": {
-        "type": "git",
+        "type": "ghtagtar",
+        "repo": "kjdev/php-ext-zstd",
         "path": "php-src/ext/zstd",
-        "rev": "master",
-        "url": "https://github.com/kjdev/php-ext-zstd",
         "license": {
             "type": "file",
             "path": "LICENSE"
@@ -462,10 +480,8 @@
         }
     },
     "krb5": {
-        "type": "ghtagtar",
-        "repo": "krb5/krb5",
-        "match": "krb5.+-final",
-        "prefer-stable": true,
+        "type": "url",
+        "url": "https://web.mit.edu/kerberos/dist/krb5/1.22/krb5-1.22.2.tar.gz",
         "license": {
             "type": "file",
             "path": "NOTICE"
@@ -474,7 +490,7 @@
     "ldap": {
         "type": "filelist",
         "url": "https://www.openldap.org/software/download/OpenLDAP/openldap-release/",
-        "regex": "/href=\"(?<file>openldap-(?<version>[^\"]+)\\.tgz)\"/",
+        "regex": "/href=\"(?<file>openldap-(?<version>2\\.6\\.[^\"]+)\\.tgz)\"/",
         "license": {
             "type": "file",
             "path": "LICENSE"
@@ -681,6 +697,14 @@
         "license": {
             "type": "file",
             "path": "LICENSE"
+        }
+    },
+    "libmpdec": {
+        "type": "url",
+        "url": "https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-4.0.1.tar.gz",
+        "license": {
+            "type": "file",
+            "path": "COPYRIGHT.txt"
         }
     },
     "libmemcached": {
@@ -975,7 +999,7 @@
     "openssl": {
         "type": "ghrel",
         "repo": "openssl/openssl",
-        "match": "openssl.+\\.tar\\.gz",
+        "match": "openssl-3.+\\.tar\\.gz",
         "prefer-stable": true,
         "alt": {
             "type": "filelist",
@@ -1169,7 +1193,6 @@
         "path": "php-src/ext/swoole",
         "type": "ghtar",
         "repo": "swoole/swoole-src",
-        "match": "v6\\.+",
         "prefer-stable": true,
         "license": {
             "type": "file",
